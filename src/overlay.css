@@ -1,0 +1,459 @@
+/* ══════════════════════════════════════════════════════════════════
+   VoxForge — Overlay Bubble Styles
+   Premium floating voice bubble with waveform visualization.
+   The overlay window is click-through by default; only the bubble
+   itself accepts mouse events (via setIgnoreCursorEvents).
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Brand palette */
+  --vf-primary: #6C5CE7;
+  --vf-primary-light: #A29BFE;
+  --vf-primary-glow: rgba(108, 92, 231, 0.4);
+  --vf-accent: #00CEC9;
+  --vf-accent-glow: rgba(0, 206, 201, 0.3);
+  --vf-danger: #FF6B6B;
+  --vf-success: #00B894;
+  --vf-bg-dark: #0D0D12;
+  --vf-surface: #1A1A24;
+  --vf-text: #F0F0F5;
+  --vf-text-dim: rgba(240, 240, 245, 0.5);
+
+  /* Bubble sizing */
+  --bubble-size: 64px;
+  --bubble-rec-w: 240px;
+  --bubble-rec-h: 64px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ─── Container — fills the whole window, no pointer events ──────── */
+
+.voice-bubble-container {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 24px;
+  gap: 10px;
+  pointer-events: none;
+  /* Container is click-through */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ─── Hit area — wraps the bubble & timer, receives events ───────── */
+
+.bubble-hit-area {
+  pointer-events: auto;
+  /* This area accepts mouse events */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding: 8px;
+}
+
+/* ─── Bubble entrance ────────────────────────────────────────────── */
+
+.bubble-in {
+  animation: bubblePopIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes bubblePopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5) translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ─── The Bubble ─────────────────────────────────────────────────── */
+
+.voice-bubble {
+  position: relative;
+  width: var(--bubble-size);
+  height: var(--bubble-size);
+  border-radius: 50%;
+  background: linear-gradient(145deg, #1E1E2E, #12121A);
+  border: 2px solid rgba(108, 92, 231, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+    height 0.4s ease,
+    border-radius 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.3s ease,
+    border-color 0.3s ease,
+    background 0.3s ease;
+  overflow: hidden;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.4),
+    0 0 30px rgba(108, 92, 231, 0.08);
+}
+
+.voice-bubble:hover {
+  transform: scale(1.08);
+  border-color: rgba(108, 92, 231, 0.5);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 24px var(--vf-primary-glow);
+}
+
+.voice-bubble:active {
+  transform: scale(0.95);
+}
+
+/* ─── Idle pulse ring ────────────────────────────────────────────── */
+
+.voice-bubble::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  border: 2px solid var(--vf-primary);
+  opacity: 0;
+  animation: idlePulse 3s ease-in-out infinite;
+}
+
+@keyframes idlePulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+
+  50% {
+    transform: scale(1.12);
+    opacity: 0.3;
+  }
+}
+
+/* ─── Icon ───────────────────────────────────────────────────────── */
+
+.bubble-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RECORDING — Expanded pill with waveform
+   ═══════════════════════════════════════════════════════════════════ */
+
+.voice-bubble.is-recording {
+  width: var(--bubble-rec-w);
+  height: var(--bubble-rec-h);
+  border-radius: 36px;
+  border-color: var(--vf-primary);
+  background: linear-gradient(145deg, #1A1528, #0F0D18);
+  box-shadow:
+    0 0 40px var(--vf-primary-glow),
+    0 0 80px rgba(108, 92, 231, 0.15),
+    inset 0 0 20px rgba(108, 92, 231, 0.06);
+}
+
+.voice-bubble.is-recording::before {
+  animation: none;
+  opacity: 0;
+}
+
+.voice-bubble.is-recording:hover {
+  transform: none;
+}
+
+/* ─── Waveform bars ──────────────────────────────────────────────── */
+
+.waveform-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+  padding: 0 18px;
+  width: 100%;
+}
+
+.wave-bar {
+  width: 3px;
+  min-height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--vf-primary-light), var(--vf-primary));
+  animation: waveBarPulse var(--wave-dur, 0.8s) ease-in-out infinite alternate;
+  animation-delay: var(--wave-delay, 0s);
+  will-change: transform, height;
+  transition: height 0.08s ease-out;
+  box-shadow: 0 0 6px var(--vf-primary-glow);
+}
+
+@keyframes waveBarPulse {
+  0% {
+    transform: scaleY(0.3);
+    opacity: 0.5;
+  }
+
+  100% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/* ─── Stop indicator in center of waveform ───────────────────────── */
+
+.wave-stop-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--vf-danger);
+  flex-shrink: 0;
+  margin: 0 6px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  box-shadow: 0 0 10px rgba(255, 107, 107, 0.4);
+}
+
+.wave-stop-btn:hover {
+  transform: scale(1.15);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PROCESSING — Morphing dots
+   ═══════════════════════════════════════════════════════════════════ */
+
+.voice-bubble.is-processing {
+  border-color: var(--vf-accent);
+  box-shadow:
+    0 0 30px var(--vf-accent-glow),
+    0 0 60px rgba(0, 206, 201, 0.1);
+  animation: procPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes procPulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+.bubble-dots {
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+
+.proc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vf-accent);
+  animation: dotBounce 1.2s ease-in-out infinite;
+  box-shadow: 0 0 8px var(--vf-accent-glow);
+}
+
+@keyframes dotBounce {
+
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: translateY(-8px) scale(1.1);
+    opacity: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DONE — Green flash
+   ═══════════════════════════════════════════════════════════════════ */
+
+.voice-bubble.is-done {
+  border-color: var(--vf-success);
+  box-shadow:
+    0 0 30px rgba(0, 184, 148, 0.3),
+    0 0 60px rgba(0, 184, 148, 0.1);
+  animation: doneFlash 0.6s ease forwards;
+}
+
+@keyframes doneFlash {
+  0% {
+    transform: scale(1.1);
+  }
+
+  50% {
+    transform: scale(0.95);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.bubble-check svg {
+  animation: checkPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+}
+
+@keyframes checkPop {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TIMER BADGE
+   ═══════════════════════════════════════════════════════════════════ */
+
+.bubble-timer-badge {
+  margin-top: 6px;
+  background: rgba(13, 13, 18, 0.9);
+  border: 1px solid rgba(108, 92, 231, 0.3);
+  color: var(--vf-primary-light);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(8px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   STREAMING TEXT PREVIEW
+   ═══════════════════════════════════════════════════════════════════ */
+
+.bubble-preview {
+  pointer-events: auto;
+  background: rgba(13, 13, 18, 0.92);
+  border: 1px solid rgba(108, 92, 231, 0.2);
+  color: var(--vf-text);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 14px;
+  border-radius: 14px;
+  max-width: 320px;
+  text-align: center;
+  word-break: break-word;
+  backdrop-filter: blur(12px);
+  animation: previewFadeIn 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes previewFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ERROR CARD
+   ═══════════════════════════════════════════════════════════════════ */
+
+.bubble-error-card {
+  pointer-events: auto;
+  background: rgba(13, 13, 18, 0.95);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 16px;
+  padding: 16px 20px;
+  max-width: 300px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.bubble-error-accent {
+  width: 40px;
+  height: 3px;
+  background: var(--vf-danger);
+  border-radius: 2px;
+  margin-bottom: 12px;
+}
+
+.bubble-error-title {
+  color: var(--vf-danger);
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.bubble-error-msg {
+  color: var(--vf-text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.bubble-error-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-retry {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--vf-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-retry:hover {
+  background: var(--vf-primary-light);
+}
+
+.btn-dismiss {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--vf-text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.btn-dismiss:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}

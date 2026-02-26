@@ -1,0 +1,50 @@
+[package]
+name = "voxforge"
+version = "0.1.0"
+description = "VoxForge — Real-time AI Voice-to-Text"
+authors = ["thanseefpp"]
+edition = "2021"
+
+[lib]
+name = "voxforge_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "image-ico"] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+# Audio capture
+cpal = "0.15"
+
+# WebSocket client (for Deepgram)
+tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
+
+# HTTP client (for Groq)
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# Clipboard
+arboard = "3"
+
+# macOS native APIs (focus, keyboard events)
+cocoa = "0.26"
+objc = "0.2"
+core-graphics = "0.24"
+core-foundation = "0.10"
+
+# Whisper offline fallback
+whisper-rs = { version = "0.13", features = ["metal"] }
+
+# Hotkey
+rdev = { version = "0.5", features = ["unstable_grab"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
