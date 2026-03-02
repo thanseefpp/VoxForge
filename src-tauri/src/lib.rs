@@ -7,6 +7,7 @@ mod deepgram;
 mod focus;
 mod groq;
 mod paste;
+mod whisper;
 
 use audio::AudioRecorder;
 use groq::PromptMode;
@@ -17,32 +18,32 @@ use tauri::{Emitter, Manager};
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AppSettings {
     pub deepgram_api_key: String,
     pub groq_api_key: String,
-    pub stt_engine: String,  // "deepgram" | "whisper"
-    pub prompt_mode: String, // "direct" | "coding" | "email" | "general" | "custom"
+    #[serde(default = "default_engine")]
+    pub stt_engine: String,
+    #[serde(default = "default_prompt_mode")]
+    pub prompt_mode: String,
     pub custom_prompt: String,
+    #[serde(default = "default_true")]
     pub auto_paste: bool,
     pub llm_enabled: bool,
+    #[serde(default = "default_groq_model")]
     pub groq_model: String,
+    #[serde(default = "default_whisper_model")]
+    pub whisper_model: String,
 }
 
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            deepgram_api_key: String::new(),
-            groq_api_key: String::new(),
-            stt_engine: "deepgram".to_string(),
-            prompt_mode: "direct".to_string(),
-            custom_prompt: String::new(),
-            auto_paste: true,
-            llm_enabled: false,
-            groq_model: "llama-3.1-8b-instant".to_string(),
-        }
-    }
-}
+fn default_engine() -> String { "deepgram".to_string() }
+fn default_prompt_mode() -> String { "direct".to_string() }
+fn default_true() -> bool { true }
+fn default_groq_model() -> String { "llama-3.1-8b-instant".to_string() }
+fn default_whisper_model() -> String { "ggml-small-q8_0.bin".to_string() }
+
+// Default is derived with #[serde(default)] + field defaults above
 
 // ─── App State ───────────────────────────────────────────────────────────────
 
@@ -78,6 +79,28 @@ fn get_audio_level(state: tauri::State<'_, AppState>) -> f32 {
 }
 
 #[tauri::command]
+fn check_whisper_model_downloaded(model_name: String) -> bool {
+    whisper::is_model_downloaded(&model_name)
+}
+
+#[tauri::command]
+fn download_whisper_model(app: tauri::AppHandle, model_name: String) {
+    std::thread::spawn(move || {
+        match whisper::ensure_model(&model_name, &app) {
+            Ok(_) => eprintln!("[VoxForge] Model ready: {}", model_name),
+            Err(e) => {
+                eprintln!("[VoxForge] Download failed: {}", e);
+                let _ = app.emit("model-download", serde_json::json!({
+                    "status": "error",
+                    "model": model_name,
+                    "error": e,
+                }));
+            }
+        }
+    });
+}
+
+#[tauri::command]
 fn toggle_recording(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     let is_recording = state.is_recording.load(Ordering::SeqCst);
@@ -88,7 +111,7 @@ fn toggle_recording(app: tauri::AppHandle) {
         state.is_recording.store(false, Ordering::SeqCst);
         state.stop_streaming.store(true, Ordering::SeqCst);
 
-        let _audio = state.recorder.lock().unwrap().stop_recording();
+        let audio = state.recorder.lock().unwrap().stop_recording();
         let _ = app.emit("pipeline-status", "processing");
 
         let settings = state.settings.lock().unwrap().clone();
@@ -96,13 +119,57 @@ fn toggle_recording(app: tauri::AppHandle) {
         // Finalize in background thread
         let app_clone = app.clone();
         std::thread::spawn(move || {
-            // Restore focus before pasting
-            focus::restore_focus();
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            // ── Whisper offline mode ──
+            if settings.stt_engine == "whisper" {
+                eprintln!("[VoxForge] Running Whisper offline transcription...");
+                let _ = app_clone.emit("pipeline-status", "transcribing");
 
-            // If using whisper offline (no Deepgram key), transcribe the buffer
-            if settings.stt_engine == "whisper" || settings.deepgram_api_key.is_empty() {
-                eprintln!("[VoxForge] Offline finalization skipped (Deepgram handled streaming)");
+                match whisper::transcribe(&audio, &settings.whisper_model, &app_clone) {
+                    Ok(text) if !text.is_empty() => {
+                        let _ = app_clone.emit("streaming-text", &text);
+
+                        // Polish with Groq if LLM enabled
+                        let final_text = if settings.llm_enabled && settings.prompt_mode != "direct" {
+                            let mode = match settings.prompt_mode.as_str() {
+                                "coding" => groq::PromptMode::Coding,
+                                "email" => groq::PromptMode::Email,
+                                "general" => groq::PromptMode::General,
+                                "custom" => groq::PromptMode::Custom,
+                                _ => groq::PromptMode::Direct,
+                            };
+                            if mode != groq::PromptMode::Direct {
+                                eprintln!("[VoxForge] Polishing Whisper output with Groq...");
+                                let _ = app_clone.emit("pipeline-status", "polishing");
+                                let polished = groq::polish_prompt(
+                                    &settings.groq_api_key, &text, &mode,
+                                    &settings.custom_prompt, &settings.groq_model,
+                                );
+                                let _ = app_clone.emit("streaming-text", &polished);
+                                polished
+                            } else {
+                                text
+                            }
+                        } else {
+                            text
+                        };
+
+                        // Paste result
+                        if settings.auto_paste {
+                            focus::restore_focus();
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            let _ = paste::paste_text(&final_text);
+                        }
+                    }
+                    Ok(_) => eprintln!("[VoxForge] Whisper returned empty text"),
+                    Err(e) => {
+                        eprintln!("[VoxForge] Whisper error: {}", e);
+                        let _ = app_clone.emit("pipeline-error", &e);
+                    }
+                }
+            } else {
+                // Deepgram: text was already streamed word-by-word
+                focus::restore_focus();
+                std::thread::sleep(std::time::Duration::from_millis(150));
             }
 
             // Deepgram: text was already streamed and pasted word-by-word
@@ -312,6 +379,8 @@ pub fn run() {
             save_settings,
             check_accessibility,
             get_audio_level,
+            check_whisper_model_downloaded,
+            download_whisper_model,
             toggle_recording,
         ])
         .setup(|app| {

@@ -34,6 +34,9 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 # Clipboard
 arboard = "3"
 
+# Home dir
+dirs = "5"
+
 # macOS native APIs (focus, keyboard events)
 cocoa = "0.26"
 objc = "0.2"

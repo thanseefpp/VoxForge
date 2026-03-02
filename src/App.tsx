@@ -20,6 +20,7 @@ interface Settings {
   auto_paste: boolean;
   llm_enabled: boolean;
   groq_model: string;
+  whisper_model: string;
 }
 
 const defaultSettings: Settings = {
@@ -31,6 +32,7 @@ const defaultSettings: Settings = {
   auto_paste: true,
   llm_enabled: false,
   groq_model: "llama-3.1-8b-instant",
+  whisper_model: "ggml-small-q8_0.bin",
 };
 
 export default function App() {
@@ -38,13 +40,47 @@ export default function App() {
   const [saved, setSaved] = useState(false);
   const [accessGranted, setAccessGranted] = useState(false);
 
-  // Load settings on mount
+  // Track download status per model: "idle" | "downloading" | "done" | "error"
+  const [modelStatus, setModelStatus] = useState<Record<string, {
+    status: string;
+    progress: number;
+    downloaded_mb?: number;
+    total_mb?: number;
+  }>>({});
+
+  // Check which models are already downloaded on mount
   useEffect(() => {
     (async () => {
       const s = await invoke<Settings>("get_settings");
       if (s) setSettings(s);
       const a = await invoke<boolean>("check_accessibility");
       if (a !== undefined) setAccessGranted(a);
+
+      // Check each Whisper model download status
+      for (const modelName of ["ggml-small-q8_0.bin", "ggml-large-v3-turbo-q8_0.bin"]) {
+        const downloaded = await invoke<boolean>("check_whisper_model_downloaded", { modelName });
+        if (downloaded) {
+          setModelStatus(prev => ({ ...prev, [modelName]: { status: "done", progress: 100 } }));
+        }
+      }
+
+      // Listen for model download progress events
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        listen<any>("model-download", (e: any) => {
+          const p = e.payload;
+          const model = p.model as string;
+          setModelStatus(prev => ({
+            ...prev,
+            [model]: {
+              status: p.status,
+              progress: p.progress || 0,
+              downloaded_mb: p.downloaded_mb,
+              total_mb: p.total_mb,
+            },
+          }));
+        });
+      } catch { }
     })();
   }, []);
 
@@ -136,7 +172,7 @@ export default function App() {
           >
             <div className="toggle-btn-icon">⚡</div>
             <div className="toggle-btn-name">Deepgram</div>
-            <div className="toggle-btn-desc">Real-time streaming</div>
+            <div className="toggle-btn-desc">Real-time (Nova-3)</div>
           </button>
           <button
             className={`toggle-btn ${settings.stt_engine === "whisper" ? "active" : ""}`}
@@ -147,6 +183,92 @@ export default function App() {
             <div className="toggle-btn-desc">Offline / local</div>
           </button>
         </div>
+
+        {/* Whisper model selector — only shown when Whisper is selected */}
+        {settings.stt_engine === "whisper" && (() => {
+          const models = [
+            { id: "ggml-small-q8_0.bin", name: "Small Q8", size: "~180 MB", desc: "Fast", icon: "⚡" },
+            { id: "ggml-large-v3-turbo-q8_0.bin", name: "Large v3 Turbo", size: "~810 MB", desc: "Best accuracy", icon: "🧠" },
+          ];
+          return (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="card-label">Whisper Model</div>
+              <div className="card-desc">Click to download · Select a downloaded model to use</div>
+              <div className="toggle-group" style={{ flexDirection: "column" }}>
+                {models.map((m) => {
+                  const st = modelStatus[m.id] || { status: "idle", progress: 0 };
+                  const isDownloaded = st.status === "done";
+                  const isDownloading = st.status === "downloading" || st.status === "starting";
+                  const isSelected = settings.whisper_model === m.id && isDownloaded;
+                  const isError = st.status === "error";
+
+                  const handleClick = () => {
+                    if (isDownloading) return; // Don't interfere
+                    if (isDownloaded) {
+                      update("whisper_model", m.id); // Select this model
+                    } else {
+                      // Start download
+                      invoke("download_whisper_model", { modelName: m.id });
+                    }
+                  };
+
+                  return (
+                    <button
+                      key={m.id}
+                      className={`toggle-btn ${isSelected ? "active" : ""}`}
+                      onClick={handleClick}
+                      style={{
+                        position: "relative",
+                        overflow: "hidden",
+                        opacity: isDownloading ? 0.85 : 1,
+                        cursor: isDownloading ? "wait" : "pointer",
+                        minHeight: 52,
+                      }}
+                    >
+                      {/* Background progress fill */}
+                      {isDownloading && (
+                        <div style={{
+                          position: "absolute",
+                          left: 0, top: 0, bottom: 0,
+                          width: `${st.progress}%`,
+                          background: "linear-gradient(90deg, rgba(108,92,231,0.15), rgba(0,206,201,0.15))",
+                          transition: "width 0.4s ease",
+                          borderRadius: "inherit",
+                          zIndex: 0,
+                        }} />
+                      )}
+
+                      <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
+                        <div style={{ fontSize: 18, flexShrink: 0 }}>{m.icon}</div>
+                        <div style={{ flex: 1, textAlign: "left" }}>
+                          <div style={{ fontSize: 12, fontWeight: 700 }}>{m.name}</div>
+                          <div style={{ fontSize: 10, opacity: 0.6 }}>{m.size} · {m.desc}</div>
+                        </div>
+                        <div style={{ flexShrink: 0, fontSize: 11, fontWeight: 700 }}>
+                          {isDownloading ? (
+                            <span style={{ color: "var(--vf-accent)" }}>
+                              {st.progress}%
+                            </span>
+                          ) : isDownloaded ? (
+                            <span style={{ color: "var(--vf-success)" }}>
+                              {isSelected ? "● Selected" : "✓ Ready"}
+                            </span>
+                          ) : isError ? (
+                            <span style={{ color: "var(--vf-danger)" }}>✕ Retry</span>
+                          ) : (
+                            <span style={{ color: "var(--vf-primary-light)" }}>
+                              ↓ Download
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Section 3: LLM Prompt Polish ── */}
