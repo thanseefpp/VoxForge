@@ -58,15 +58,15 @@ VoxForge is a **native macOS dictation app** that transcribes your speech in rea
 | 💻 **Intel Mac** | `VoxForge_*_x64.dmg` |
 
 <details>
-<summary>⚠️ macOS Gatekeeper — First launch instructions</summary>
+<summary>⚠️ "VoxForge.app is damaged" — Fix for macOS Gatekeeper</summary>
 
-Since VoxForge isn't signed with an Apple Developer certificate yet:
-1. Download the `.dmg` file
-2. Drag **VoxForge.app** to Applications
-3. **Right-click** → **Open** (don't double-click)
-4. Click **Open** in the dialog
+Since VoxForge isn't signed with an Apple Developer certificate yet, macOS quarantines it. Run this **once** after dragging to Applications:
 
-You only need to do this once.
+```bash
+xattr -cr /Applications/VoxForge.app
+```
+
+Then open normally. You only need to do this once.
 </details>
 
 ---
