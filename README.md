@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/thanseefpp/VoxForge/releases/latest"><img src="https://img.shields.io/github/v/release/thanseefpp/VoxForge?style=for-the-badge&logo=github&logoColor=white&labelColor=0A0A10&color=00CEC9&label=Download" alt="Download"></a>
   <a href="https://github.com/thanseefpp/VoxForge/stargazers"><img src="https://img.shields.io/github/stars/thanseefpp/VoxForge?style=for-the-badge&logo=github&logoColor=white&labelColor=0A0A10&color=6C5CE7" alt="Stars"></a>
   <a href="https://github.com/thanseefpp/VoxForge/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-00CEC9?style=for-the-badge&labelColor=0A0A10" alt="License"></a>
   <img src="https://img.shields.io/badge/Platform-macOS-A29BFE?style=for-the-badge&logo=apple&logoColor=white&labelColor=0A0A10" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-0.1.0-00B894?style=for-the-badge&labelColor=0A0A10" alt="Version">
 </p>
 
 <p align="center">
@@ -45,6 +45,29 @@ VoxForge is a **native macOS dictation app** that transcribes your speech in rea
 | 🎛️ | **Model Choice** | Pick Whisper Small (fast) or Large v3 Turbo (best accuracy) |
 | 🔑 | **Bring Your Keys** | Use your own Deepgram & Groq API keys — your data, your control |
 | 🎨 | **Premium UI** | Dark glassmorphism design with smooth micro-animations |
+
+---
+
+## 📥 Download
+
+> **Get the latest release** → [**GitHub Releases**](https://github.com/thanseefpp/VoxForge/releases/latest)
+
+| Chip | Download |
+|------|----------|
+| 🍎 **Apple Silicon** (M1/M2/M3/M4) | `VoxForge_*_aarch64.dmg` |
+| 💻 **Intel Mac** | `VoxForge_*_x64.dmg` |
+
+<details>
+<summary>⚠️ macOS Gatekeeper — First launch instructions</summary>
+
+Since VoxForge isn't signed with an Apple Developer certificate yet:
+1. Download the `.dmg` file
+2. Drag **VoxForge.app** to Applications
+3. **Right-click** → **Open** (don't double-click)
+4. Click **Open** in the dialog
+
+You only need to do this once.
+</details>
 
 ---
 

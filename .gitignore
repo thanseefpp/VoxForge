@@ -41,3 +41,4 @@ src-tauri/target/
 
 # Whisper model cache (user-specific, not in repo)
 # Models are downloaded to ~/.voxforge/models/ at runtime
+.vscode/

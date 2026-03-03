@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest    # Apple Silicon (arm64)
+            args: --target aarch64-apple-darwin
+          - platform: macos-13        # Intel (x86_64)
+            args: --target x86_64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'VoxForge ${{ github.ref_name }}'
+          releaseBody: |
+            ## 🎙️ VoxForge ${{ github.ref_name }}
+
+            ### Download
+            - **Apple Silicon (M1/M2/M3/M4):** `VoxForge_*_aarch64.dmg`
+            - **Intel Mac:** `VoxForge_*_x64.dmg`
+
+            ### What's New
+            See the [full changelog](https://github.com/thanseefpp/VoxForge/commits/${{ github.ref_name }})
+
+            ---
+            > ⚠️ **macOS Gatekeeper:** Right-click → Open on first launch if you see a security warning.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
