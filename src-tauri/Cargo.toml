@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "VoxForge — Real-time AI Voice-to-Text"
 authors = ["thanseefpp"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/thanseefpp/VoxForge"
+homepage = "https://github.com/thanseefpp/VoxForge"
 
 [lib]
 name = "voxforge_lib"

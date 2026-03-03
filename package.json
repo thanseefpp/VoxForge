@@ -1,8 +1,28 @@
 {
   "name": "voxforge",
-  "private": true,
   "version": "0.1.0",
+  "description": "Real-time AI voice-to-text dictation app with Deepgram, Whisper, and Groq LLM polishing",
   "type": "module",
+  "license": "MIT",
+  "author": "thanseefpp",
+  "homepage": "https://github.com/thanseefpp/VoxForge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thanseefpp/VoxForge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thanseefpp/VoxForge/issues"
+  },
+  "keywords": [
+    "voice-to-text",
+    "speech-recognition",
+    "deepgram",
+    "whisper",
+    "groq",
+    "tauri",
+    "dictation",
+    "stt"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
