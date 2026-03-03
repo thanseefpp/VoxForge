@@ -33,7 +33,8 @@ src-tauri/target/
 .AppleDouble
 .LSOverride
 ._*
-
+.claude/*
+.claude/
 # Environment / secrets
 .env
 .env.*

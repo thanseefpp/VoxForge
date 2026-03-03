@@ -12,9 +12,14 @@ mod whisper;
 use audio::AudioRecorder;
 use groq::PromptMode;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Emitter, Manager};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -35,6 +40,12 @@ pub struct AppSettings {
     pub groq_model: String,
     #[serde(default = "default_whisper_model")]
     pub whisper_model: String,
+    /// Last known logical X position of the overlay window. `None` means
+    /// "use default bottom-center placement on first show".
+    pub window_x: Option<f64>,
+    /// Last known logical Y position of the overlay window. `None` means
+    /// "use default bottom-center placement on first show".
+    pub window_y: Option<f64>,
 }
 
 fn default_engine() -> String { "deepgram".to_string() }
@@ -43,7 +54,91 @@ fn default_true() -> bool { true }
 fn default_groq_model() -> String { "llama-3.1-8b-instant".to_string() }
 fn default_whisper_model() -> String { "ggml-small-q8_0.bin".to_string() }
 
-// Default is derived with #[serde(default)] + field defaults above
+// ─── Settings Persistence ────────────────────────────────────────────────────
+
+/// Returns the path to the settings file: `~/.voxforge/settings.json`.
+/// Uses the same base directory as the Whisper model cache.
+fn settings_file_path() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".voxforge").join("settings.json")
+}
+
+/// Load settings from `~/.voxforge/settings.json`.
+/// Returns `AppSettings::default()` if the file is absent, unreadable, or malformed.
+/// Never panics — all errors are logged with `eprintln!`.
+fn load_settings_from_disk() -> AppSettings {
+    let path = settings_file_path();
+    if !path.exists() {
+        return AppSettings::default();
+    }
+
+    match fs::read_to_string(&path) {
+        Ok(contents) => match serde_json::from_str::<AppSettings>(&contents) {
+            Ok(settings) => {
+                eprintln!("[VoxForge] Settings loaded from {}", path.display());
+                settings
+            }
+            Err(e) => {
+                eprintln!("[VoxForge] settings.json is malformed, using defaults: {}", e);
+                AppSettings::default()
+            }
+        },
+        Err(e) => {
+            eprintln!("[VoxForge] Could not read settings.json, using defaults: {}", e);
+            AppSettings::default()
+        }
+    }
+}
+
+/// Persist settings to `~/.voxforge/settings.json`.
+/// Writes to a sibling `.tmp` file first, then renames atomically so a crash
+/// mid-write never corrupts the live settings file.
+/// All errors are logged with `eprintln!`; the function never panics.
+fn save_settings_to_disk(settings: &AppSettings) {
+    let path = settings_file_path();
+
+    // Ensure the ~/.voxforge/ directory exists
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("[VoxForge] Could not create settings dir {}: {}", parent.display(), e);
+            return;
+        }
+    }
+
+    let json = match serde_json::to_string_pretty(settings) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[VoxForge] Failed to serialize settings: {}", e);
+            return;
+        }
+    };
+
+    // Write to temp file then rename for atomicity
+    let tmp_path = path.with_extension("tmp");
+    match fs::File::create(&tmp_path) {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(json.as_bytes()) {
+                eprintln!("[VoxForge] Failed to write settings temp file: {}", e);
+                return;
+            }
+            if let Err(e) = file.flush() {
+                eprintln!("[VoxForge] Failed to flush settings temp file: {}", e);
+                return;
+            }
+        }
+        Err(e) => {
+            eprintln!("[VoxForge] Failed to create settings temp file: {}", e);
+            return;
+        }
+    }
+
+    if let Err(e) = fs::rename(&tmp_path, &path) {
+        eprintln!("[VoxForge] Failed to rename settings temp file: {}", e);
+        return;
+    }
+
+    eprintln!("[VoxForge] Settings persisted to {}", path.display());
+}
 
 // ─── App State ───────────────────────────────────────────────────────────────
 
@@ -52,56 +147,16 @@ pub struct AppState {
     pub settings: Mutex<AppSettings>,
     pub is_recording: AtomicBool,
     pub stop_streaming: Arc<AtomicBool>,
+    /// Flipped on the first call to `show_overlay`. Subsequent calls skip
+    /// repositioning so the user's dragged position is preserved.
+    pub overlay_positioned: OnceLock<()>,
 }
 
-// ─── Tauri Commands ──────────────────────────────────────────────────────────
+// ─── Core Recording Logic ────────────────────────────────────────────────────
 
-#[tauri::command]
-fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
-    state.settings.lock().unwrap().clone()
-}
-
-#[tauri::command]
-fn save_settings(state: tauri::State<'_, AppState>, settings: AppSettings) {
-    eprintln!("[VoxForge] Settings saved: engine={}, mode={}, llm={}, model={}",
-        settings.stt_engine, settings.prompt_mode, settings.llm_enabled, settings.groq_model);
-    *state.settings.lock().unwrap() = settings;
-}
-
-#[tauri::command]
-fn check_accessibility() -> bool {
-    paste::check_accessibility()
-}
-
-#[tauri::command]
-fn get_audio_level(state: tauri::State<'_, AppState>) -> f32 {
-    state.recorder.lock().unwrap().get_audio_level()
-}
-
-#[tauri::command]
-fn check_whisper_model_downloaded(model_name: String) -> bool {
-    whisper::is_model_downloaded(&model_name)
-}
-
-#[tauri::command]
-fn download_whisper_model(app: tauri::AppHandle, model_name: String) {
-    std::thread::spawn(move || {
-        match whisper::ensure_model(&model_name, &app) {
-            Ok(_) => eprintln!("[VoxForge] Model ready: {}", model_name),
-            Err(e) => {
-                eprintln!("[VoxForge] Download failed: {}", e);
-                let _ = app.emit("model-download", serde_json::json!({
-                    "status": "error",
-                    "model": model_name,
-                    "error": e,
-                }));
-            }
-        }
-    });
-}
-
-#[tauri::command]
-fn toggle_recording(app: tauri::AppHandle) {
+/// Toggle recording on or off. Called by both the Tauri command and the global
+/// hotkey handler so all pipeline logic lives in exactly one place.
+fn do_toggle_recording(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let is_recording = state.is_recording.load(Ordering::SeqCst);
 
@@ -172,11 +227,9 @@ fn toggle_recording(app: tauri::AppHandle) {
                 std::thread::sleep(std::time::Duration::from_millis(150));
             }
 
-            // Deepgram: text was already streamed and pasted word-by-word
-            // Just emit done
+            // Emit done — the bubble will animate the checkmark then return to
+            // idle (mic icon) on its own. The overlay window stays visible.
             let _ = app_clone.emit("pipeline-status", "done");
-            std::thread::sleep(std::time::Duration::from_millis(1200));
-            hide_overlay(&app_clone);
         });
     } else {
         // ── START ──
@@ -187,7 +240,7 @@ fn toggle_recording(app: tauri::AppHandle) {
         match state.recorder.lock().unwrap().start_recording() {
             Ok(_) => {
                 let _ = app.emit("pipeline-status", "recording");
-                show_overlay(&app);
+                show_overlay(app);
 
                 // Restore focus so typed text goes to target app
                 std::thread::spawn(|| {
@@ -207,6 +260,75 @@ fn toggle_recording(app: tauri::AppHandle) {
             }
         }
     }
+}
+
+// ─── Tauri Commands ──────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
+    state.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_settings(state: tauri::State<'_, AppState>, settings: AppSettings) {
+    eprintln!("[VoxForge] Settings saved: engine={}, mode={}, llm={}, model={}",
+        settings.stt_engine, settings.prompt_mode, settings.llm_enabled, settings.groq_model);
+    *state.settings.lock().unwrap() = settings.clone();
+    save_settings_to_disk(&settings);
+}
+
+#[tauri::command]
+fn check_accessibility() -> bool {
+    paste::check_accessibility()
+}
+
+#[tauri::command]
+fn get_audio_level(state: tauri::State<'_, AppState>) -> f32 {
+    state.recorder.lock().unwrap().get_audio_level()
+}
+
+#[tauri::command]
+fn check_whisper_model_downloaded(model_name: String) -> bool {
+    whisper::is_model_downloaded(&model_name)
+}
+
+#[tauri::command]
+fn download_whisper_model(app: tauri::AppHandle, model_name: String) {
+    std::thread::spawn(move || {
+        match whisper::ensure_model(&model_name, &app) {
+            Ok(_) => eprintln!("[VoxForge] Model ready: {}", model_name),
+            Err(e) => {
+                eprintln!("[VoxForge] Download failed: {}", e);
+                let _ = app.emit("model-download", serde_json::json!({
+                    "status": "error",
+                    "model": model_name,
+                    "error": e,
+                }));
+            }
+        }
+    });
+}
+
+/// Toggle recording on or off. This is the IPC entry point from the frontend;
+/// the actual logic is in `do_toggle_recording`.
+#[tauri::command]
+fn toggle_recording(app: tauri::AppHandle) {
+    do_toggle_recording(&app);
+}
+
+/// Persist the overlay window's current logical position to settings so it
+/// survives across restarts. Called by the frontend after a drag ends.
+#[tauri::command]
+fn save_window_position(
+    state: tauri::State<'_, AppState>,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap();
+    settings.window_x = Some(x);
+    settings.window_y = Some(y);
+    save_settings_to_disk(&settings);
+    Ok(())
 }
 
 // ─── Deepgram Streaming Pipeline ─────────────────────────────────────────────
@@ -336,27 +458,76 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
 
 // ─── Overlay Helpers ─────────────────────────────────────────────────────────
 
-fn show_overlay(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("overlay") {
-        // Position at bottom-center of primary monitor
-        if let Some(monitor) = win.primary_monitor().ok().flatten() {
-            let screen = monitor.size();
-            let scale = monitor.scale_factor();
-            let w = 400.0;
-            let h = 300.0;
-            let x = (screen.width as f64 / scale - w) / 2.0;
-            let y = screen.height as f64 / scale - h - 80.0;
+/// The logical size of the overlay window. Must match the value in `tauri.conf.json`.
+const OVERLAY_SIZE_PX: f64 = 88.0;
 
-            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
-        }
-        let _ = win.show();
+/// Show the overlay window.
+///
+/// On the **first** call (per process lifetime) the window is positioned:
+/// - At `(settings.window_x, settings.window_y)` if the user previously saved a
+///   position, or
+/// - At the bottom-center of the primary monitor otherwise.
+///
+/// On subsequent calls the position is left untouched so the user's dragged
+/// location is preserved.
+fn show_overlay(app: &tauri::AppHandle) {
+    let Some(win) = app.get_webview_window("overlay") else {
+        return;
+    };
+
+    let state = app.state::<AppState>();
+
+    // Only position on first show; after that honour the dragged position.
+    if state.overlay_positioned.set(()).is_ok() {
+        let saved = {
+            let settings = state.settings.lock().unwrap();
+            settings.window_x.zip(settings.window_y)
+        };
+
+        let position = match saved {
+            Some((x, y)) => tauri::LogicalPosition::new(x, y),
+            None => {
+                // Default: bottom-center of the primary monitor.
+                let (sw, sh, scale) = win
+                    .primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| (m.size().width as f64, m.size().height as f64, m.scale_factor()))
+                    .unwrap_or((1440.0, 900.0, 1.0));
+                let x = (sw / scale - OVERLAY_SIZE_PX) / 2.0;
+                let y = sh / scale - OVERLAY_SIZE_PX - 80.0;
+                tauri::LogicalPosition::new(x, y)
+            }
+        };
+
+        let _ = win.set_position(tauri::Position::Logical(position));
     }
+
+    let _ = win.show();
 }
 
+/// Hide the overlay window and persist its current logical position to settings
+/// so it is restored at the same spot on the next recording session.
 fn hide_overlay(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("overlay") {
-        let _ = win.hide();
+    let Some(win) = app.get_webview_window("overlay") else {
+        return;
+    };
+
+    // Capture physical position and convert to logical coordinates.
+    if let (Ok(phys_pos), Ok(scale)) = (win.outer_position(), win.scale_factor()) {
+        if scale > 0.0 {
+            let logical_x = phys_pos.x as f64 / scale;
+            let logical_y = phys_pos.y as f64 / scale;
+
+            let state = app.state::<AppState>();
+            let mut settings = state.settings.lock().unwrap();
+            settings.window_x = Some(logical_x);
+            settings.window_y = Some(logical_y);
+            save_settings_to_disk(&settings);
+        }
     }
+
+    let _ = win.hide();
 }
 
 // ─── Run ─────────────────────────────────────────────────────────────────────
@@ -365,14 +536,16 @@ fn hide_overlay(app: &tauri::AppHandle) {
 pub fn run() {
     let app_state = AppState {
         recorder: Mutex::new(AudioRecorder::new()),
-        settings: Mutex::new(AppSettings::default()),
+        settings: Mutex::new(load_settings_from_disk()),
         is_recording: AtomicBool::new(false),
         stop_streaming: Arc::new(AtomicBool::new(false)),
+        overlay_positioned: OnceLock::new(),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -382,6 +555,7 @@ pub fn run() {
             check_whisper_model_downloaded,
             download_whisper_model,
             toggle_recording,
+            save_window_position,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -391,6 +565,32 @@ pub fn run() {
 
             // Check accessibility
             paste::check_accessibility();
+
+            // Register Ctrl+Space global hotkey to toggle recording.
+            // The handler fires on key-down only; key-up events are ignored so a
+            // single physical key press produces exactly one toggle.
+            app.handle()
+                .global_shortcut()
+                .on_shortcut(
+                    "CTRL+Space",
+                    |app_handle, _shortcut, event| {
+                        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            do_toggle_recording(app_handle);
+                        }
+                    },
+                )
+                .unwrap_or_else(|e| eprintln!("[VoxForge] Failed to register Ctrl+Space hotkey: {}", e));
+
+            // Show the overlay bubble immediately on startup so it is always
+            // visible as an idle mic button. `show_overlay` positions it once
+            // (saved position or bottom-center) and is a no-op on later calls.
+            {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    show_overlay(&handle);
+                });
+            }
 
             // System tray
             {
@@ -423,13 +623,6 @@ pub fn run() {
                     })
                     .build(app)?;
             }
-
-            // Show overlay after a delay
-            let overlay_handle = handle.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                show_overlay(&overlay_handle);
-            });
 
             Ok(())
         })

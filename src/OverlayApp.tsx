@@ -16,7 +16,7 @@ async function safeListen<T>(
     try {
         const { listen } = await import("@tauri-apps/api/event");
         return await listen<{ payload: T }>(event, (e) =>
-            handler((e as any).payload)
+            handler((e as unknown as { payload: T }).payload)
         );
     } catch {
         return () => { };
@@ -56,50 +56,57 @@ async function setIgnoreCursor(ignore: boolean) {
     } catch { }
 }
 
+// Read the current outer (physical) position of the overlay window and return
+// the logical coordinates, accounting for the device pixel ratio / scale factor.
+async function readLogicalPosition(): Promise<{ x: number; y: number } | undefined> {
+    if (!isTauri()) return undefined;
+    try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        const [phys, scale] = await Promise.all([
+            win.outerPosition(),
+            win.scaleFactor(),
+        ]);
+        return { x: phys.x / scale, y: phys.y / scale };
+    } catch {
+        return undefined;
+    }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 type BubbleState = "idle" | "recording" | "processing" | "done" | "error";
 
-// ─── Waveform Component ─────────────────────────────────────────────────────
+// ─── Internal Waveform Circle Component ─────────────────────────────────────
+// 7 vertical bars drawn inside the circle bubble. Bar heights are driven by
+// `audioLevel` (0–1). The cosine envelope makes the center bar tallest and
+// the outer bars shortest, giving an equalizer appearance.
 
-function WaveformBars({ audioLevel }: { audioLevel: number }) {
-    const barCount = 28;
+const BAR_COUNT = 7;
 
-    // Use useMemo so random durations don't regenerate each render
-    const barMeta = useMemo(
-        () =>
-            Array.from({ length: barCount }, (_, i) => ({
-                delay: (i * 0.04).toFixed(2),
-                dur: (0.4 + Math.random() * 0.5).toFixed(2),
-                centerDist: Math.abs(i - barCount / 2) / (barCount / 2),
-            })),
-        []
-    );
+const BAR_META = Array.from({ length: BAR_COUNT }, (_, i) => {
+    const norm = (i - 3) / 3; // -1 … +1, centre = 0
+    const envelope = Math.cos((norm * Math.PI) / 2); // 1 at centre, 0 at edges
+    return {
+        envelope,
+        delay: (i * 0.07).toFixed(2),
+        dur: (0.45 + Math.abs(norm) * 0.25).toFixed(2),
+    };
+});
 
-    const bars = barMeta.map((meta, i) => {
-        const baseHeight = 10 + (1 - meta.centerDist) * 30;
-        const dynamicHeight = baseHeight * (0.25 + audioLevel * 0.75);
-
-        return (
-            <div
-                key={i}
-                className="wave-bar"
-                style={{
-                    height: `${Math.max(3, dynamicHeight)}px`,
-                    ["--wave-delay" as any]: `${meta.delay}s`,
-                    ["--wave-dur" as any]: `${meta.dur}s`,
-                }}
-            />
-        );
-    });
-
-    const left = bars.slice(0, Math.floor(barCount / 2));
-    const right = bars.slice(Math.floor(barCount / 2));
-
+function WaveformCircle({ audioLevel }: { audioLevel: number }) {
     return (
-        <div className="waveform-container">
-            {left}
-            <div className="wave-stop-btn" title="Click to stop" />
-            {right}
+        <div className="waveform-circle-inner">
+            {BAR_META.map((m, i) => (
+                <div
+                    key={i}
+                    className="waveform-inner-bar"
+                    style={{
+                        height: `${Math.max(4, 4 + m.envelope * 24 * (0.15 + audioLevel * 0.85))}px`,
+                        ["--bar-delay" as string]: `${m.delay}s`,
+                        ["--bar-dur" as string]: `${m.dur}s`,
+                    } as React.CSSProperties}
+                />
+            ))}
         </div>
     );
 }
@@ -153,29 +160,6 @@ function CheckIcon() {
     );
 }
 
-// ─── Timer Hook ──────────────────────────────────────────────────────────────
-
-function useTimer(running: boolean): string {
-    const [seconds, setSeconds] = useState(0);
-    const ref = useRef<ReturnType<typeof setInterval> | null>(null);
-
-    useEffect(() => {
-        if (running) {
-            setSeconds(0);
-            ref.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-        } else {
-            if (ref.current) clearInterval(ref.current);
-        }
-        return () => {
-            if (ref.current) clearInterval(ref.current);
-        };
-    }, [running]);
-
-    const m = String(Math.floor(seconds / 60)).padStart(2, "0");
-    const s = String(seconds % 60).padStart(2, "0");
-    return `${m}:${s}`;
-}
-
 // ─── Audio Level Hook ────────────────────────────────────────────────────────
 
 function useAudioLevel(recording: boolean): number {
@@ -187,7 +171,7 @@ function useAudioLevel(recording: boolean): number {
             ref.current = setInterval(async () => {
                 const l = await safeInvoke<number>("get_audio_level");
                 if (l !== undefined) setLevel(l);
-            }, 50); // ~20fps for smooth waveform
+            }, 50); // ~20 fps for smooth waveform
         } else {
             if (ref.current) clearInterval(ref.current);
             setLevel(0);
@@ -205,11 +189,25 @@ function useAudioLevel(recording: boolean): number {
 export default function OverlayApp() {
     const [state, setState] = useState<BubbleState>("idle");
     const [errorMsg, setErrorMsg] = useState("An error occurred.");
-    const [streamingText, setStreamingText] = useState("");
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const timer = useTimer(state === "recording");
     const audioLevel = useAudioLevel(state === "recording");
     const isDragging = useRef(false);
+
+    // Stable BAR_META reference — useMemo prevents regeneration on each render
+    const _barMeta = useMemo(() => BAR_META, []);
+    void _barMeta; // consumed by WaveformCircle via module-level constant
+
+    // ── Ensure the window is the correct size on mount ──
+    useEffect(() => {
+        if (!isTauri()) return;
+        (async () => {
+            try {
+                const { getCurrentWindow } = await import("@tauri-apps/api/window");
+                const { LogicalSize } = await import("@tauri-apps/api/dpi");
+                await getCurrentWindow().setSize(new LogicalSize(88, 88));
+            } catch { }
+        })();
+    }, []);
 
     // ── Start with cursor events ignored (click-through) ──
     useEffect(() => {
@@ -225,11 +223,18 @@ export default function OverlayApp() {
         if (delay > 0) {
             hideTimer.current = setTimeout(() => {
                 setState("idle");
-                setStreamingText("");
             }, delay);
         } else {
             setState("idle");
-            setStreamingText("");
+        }
+    }, []);
+
+    // Save the window's current logical position to persistent settings.
+    // Called 80ms after a drag ends so Tauri has reported the final position.
+    const saveCurrentPosition = useCallback(async () => {
+        const pos = await readLogicalPosition();
+        if (pos) {
+            await safeInvoke("save_window_position", { x: pos.x, y: pos.y });
         }
     }, []);
 
@@ -247,7 +252,6 @@ export default function OverlayApp() {
                 await safeListen<string>("pipeline-status", (payload) => {
                     switch (payload) {
                         case "recording":
-                            setStreamingText("");
                             show("recording");
                             break;
                         case "transcribing":
@@ -268,12 +272,6 @@ export default function OverlayApp() {
                 await safeListen<string>("pipeline-error", (payload) => {
                     setErrorMsg(payload || "Recording failed.");
                     show("error");
-                })
-            );
-
-            unsubs.push(
-                await safeListen<string>("streaming-text", (text) => {
-                    setStreamingText(text);
                 })
             );
         })();
@@ -311,7 +309,11 @@ export default function OverlayApp() {
         const handleMouseUp = () => {
             document.removeEventListener("mousemove", handleMouseMove);
             document.removeEventListener("mouseup", handleMouseUp);
-            if (!isDragging.current) {
+
+            if (isDragging.current) {
+                // Persist the new position after the OS finishes moving the window.
+                setTimeout(() => { saveCurrentPosition(); }, 80);
+            } else {
                 handleBubbleClick();
             }
         };
@@ -334,6 +336,16 @@ export default function OverlayApp() {
     const handleDismiss = () => {
         show("idle");
     };
+
+    // ── State-derived class ──
+    const stateClass =
+        state === "recording"
+            ? "is-recording"
+            : state === "processing"
+                ? "is-processing"
+                : state === "done"
+                    ? "is-done"
+                    : "";
 
     // ── Error Card ──
     if (state === "error") {
@@ -362,19 +374,9 @@ export default function OverlayApp() {
         );
     }
 
-    // ── Bubble ──
-    const stateClass =
-        state === "recording"
-            ? "is-recording"
-            : state === "processing"
-                ? "is-processing"
-                : state === "done"
-                    ? "is-done"
-                    : "";
-
+    // ── Bubble (idle / recording / processing / done) ──
     return (
         <div className="voice-bubble-container">
-            {/* Interactive area — enables cursor events on hover */}
             <div
                 className="bubble-hit-area"
                 onMouseEnter={handleMouseEnter}
@@ -398,12 +400,12 @@ export default function OverlayApp() {
                         </div>
                     )}
 
-                    {/* Recording: waveform with center stop button */}
+                    {/* Recording: internal waveform bars */}
                     {state === "recording" && (
-                        <WaveformBars audioLevel={audioLevel} />
+                        <WaveformCircle audioLevel={audioLevel} />
                     )}
 
-                    {/* Processing: animated dots */}
+                    {/* Processing: animated bouncing dots */}
                     {state === "processing" && (
                         <div className="bubble-icon">
                             <ProcessingDots />
@@ -418,24 +420,11 @@ export default function OverlayApp() {
                     )}
                 </div>
 
-                {/* Timer badge */}
+                {/* Blinking red dot — top-right of bubble, visible while recording */}
                 {state === "recording" && (
-                    <div className="bubble-timer-badge">{timer}</div>
+                    <div className="bubble-rec-dot" />
                 )}
             </div>
-
-            {/* Streaming text preview */}
-            {streamingText && (state === "recording" || state === "processing") && (
-                <div
-                    className="bubble-preview"
-                    onMouseEnter={handleMouseEnter}
-                    onMouseLeave={handleMouseLeave}
-                >
-                    {streamingText.length > 80
-                        ? "…" + streamingText.slice(-80)
-                        : streamingText}
-                </div>
-            )}
         </div>
     );
 }
