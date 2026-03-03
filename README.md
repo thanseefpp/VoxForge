@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/🎙️_VoxForge-Voice_to_Text-6C5CE7?style=for-the-badge&labelColor=0A0A10" alt="VoxForge" />
+  <img src="assets/icon.png" alt="VoxForge" width="120" />
 </p>
 
 <h1 align="center">VoxForge</h1>
