@@ -277,5 +277,5 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 ---
 
 <p align="center">
-  <sub>Built with ❤️ and 🦀 by <a href="https://github.com/thanseefpp">thanseefpp</a></sub>
+  <sub>Built with ❤️ by <a href="https://github.com/thanseefpp">thanseefpp</a></sub>
 </p>
