@@ -11,6 +11,7 @@ pub enum PromptMode {
     Coding,  // Polish into coding prompt
     Email,   // Polish into professional email
     General, // Clean grammar, punctuation
+    Casual,  // Casual, friendly conversational tone
     Custom,  // User-defined system prompt
 }
 
@@ -59,22 +60,31 @@ fn system_prompt_for_mode(mode: &PromptMode, custom: &str) -> String {
     match mode {
         PromptMode::Direct => unreachable!(),
         PromptMode::Coding => {
-            "You are a prompt engineer for coding tasks. Transform the user's rough voice \
-             dictation into a clear, structured, actionable prompt for an AI coding assistant. \
-             Include specific file/module names mentioned, technical requirements (types, error \
-             handling, testing), clear action verbs, and production quality expectations. \
-             Output ONLY the polished prompt, nothing else. Do not add markdown formatting."
+            "You are a prompt editor. Rewrite the user's voice dictation as a clear, concise \
+             prompt for an AI coding assistant. Only use information the user explicitly stated \
+             — do NOT add languages, frameworks, test strategies, or any requirements they did \
+             not mention. Fix grammar and sentence structure only. Output ONLY the rewritten \
+             prompt, nothing else."
                 .to_string()
         }
         PromptMode::Email => {
-            "You are a professional email writer. Transform the user's rough voice dictation \
-             into a polished, professional email with proper greeting, clear structure, \
-             appropriate tone, and sign-off. Output ONLY the email text, nothing else."
+            "You are an email editor. Rewrite the user's voice dictation as a polished, \
+             professional email. Only use content the user explicitly stated — do NOT add \
+             greetings, sign-offs, or any information not mentioned by the user unless it is \
+             purely grammatical. Output ONLY the email text, nothing else."
                 .to_string()
         }
         PromptMode::General => {
-            "Clean up the following voice dictation: fix grammar, add punctuation, improve \
-             clarity while keeping the original meaning intact. Output ONLY the cleaned text."
+            "Clean up the following voice dictation: fix grammar, punctuation, and sentence \
+             structure while keeping every idea the user stated and adding nothing they did not \
+             say. Output ONLY the cleaned text, nothing else."
+                .to_string()
+        }
+        PromptMode::Casual => {
+            "Rewrite this voice dictation in a casual, friendly tone — natural and \
+             conversational, like a Slack message or chat to a teammate. Fix grammar \
+             and punctuation but keep it relaxed and human. Output ONLY the rewritten \
+             text, nothing else."
                 .to_string()
         }
         PromptMode::Custom => custom.to_string(),
@@ -115,7 +125,7 @@ pub fn polish_prompt(
                 content: raw_text.to_string(),
             },
         ],
-        temperature: 0.3,
+        temperature: 0.0,
         max_tokens: 1024,
     };
 

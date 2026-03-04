@@ -189,6 +189,7 @@ fn do_toggle_recording(app: &tauri::AppHandle) {
                                 "coding" => groq::PromptMode::Coding,
                                 "email" => groq::PromptMode::Email,
                                 "general" => groq::PromptMode::General,
+                                "casual" => groq::PromptMode::Casual,
                                 "custom" => groq::PromptMode::Custom,
                                 _ => groq::PromptMode::Direct,
                             };
@@ -333,6 +334,11 @@ fn save_window_position(
 
 // ─── Deepgram Streaming Pipeline ─────────────────────────────────────────────
 
+// Smoothed audio level must stay below this for SILENCE_SECS to trigger auto-stop.
+// 0.10 ≈ unscaled RMS 0.01 — above typical ambient noise, well below speech.
+const SILENCE_THRESHOLD: f32 = 0.10;
+const SILENCE_SECS: u64 = 2;
+
 fn start_deepgram_streaming(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     let api_key = state.settings.lock().unwrap().deepgram_api_key.clone();
@@ -358,6 +364,12 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
             let mut last_sent = 0usize;
             let mut accumulated_final = String::new();
             let mut send_counter = 0u64;
+            let mut last_speech_time = std::time::Instant::now();
+            let mut has_received_speech = false;
+            let mut silence_triggered = false;
+            // Exponential moving average of audio level (α=0.15, τ≈130ms at 20ms loop)
+            // smooths out transient noise spikes so they don't reset the silence timer.
+            let mut smooth_level: f32 = 0.0;
 
             loop {
                 if stop_flag.load(Ordering::SeqCst) {
@@ -396,8 +408,11 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
                                     accumulated_final.push(' ');
                                     let _ = app.emit("streaming-text", &accumulated_final.trim());
 
-                                    // Auto-paste confirmed sentences
-                                    if settings.auto_paste {
+                                    // Only paste per-sentence when NOT using LLM polish.
+                                    // When LLM is on, we accumulate everything and paste once after polish.
+                                    let use_llm = settings.llm_enabled
+                                        && settings.prompt_mode != "direct";
+                                    if settings.auto_paste && !use_llm {
                                         focus::restore_focus();
                                         std::thread::sleep(std::time::Duration::from_millis(30));
                                         let _ = paste::paste_text(&result.text);
@@ -419,6 +434,42 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
                     }
                 }
 
+                // ── Silence detection (Deepgram + LLM mode only) ──
+                if settings.llm_enabled
+                    && settings.prompt_mode != "direct"
+                    && !accumulated_final.is_empty()
+                    && !silence_triggered
+                {
+                    let raw = {
+                        let st = app.state::<AppState>();
+                        let lvl = st.recorder.lock().unwrap().get_audio_level();
+                        lvl
+                    };
+                    // EMA smoothing: damps transient spikes (keyboard, HVAC, etc.)
+                    smooth_level = smooth_level * 0.85 + raw * 0.15;
+
+                    if smooth_level > SILENCE_THRESHOLD {
+                        last_speech_time = std::time::Instant::now();
+                        has_received_speech = true;
+                    } else if has_received_speech
+                        && last_speech_time.elapsed()
+                            >= std::time::Duration::from_secs(SILENCE_SECS)
+                    {
+                        silence_triggered = true;
+                        eprintln!("[VoxForge] Silence detected — auto-stopping");
+                        let _ = app.emit("pipeline-status", "silence");
+                        // Auto-stop: flip state flags + drop audio stream
+                        {
+                            let st = app.state::<AppState>();
+                            st.is_recording.store(false, Ordering::SeqCst);
+                            let _ = st.recorder.lock().unwrap().stop_recording();
+                        }
+                        stop_flag.store(true, Ordering::SeqCst);
+                        let _ = client.close();
+                        break;
+                    }
+                }
+
                 // Small sleep to prevent busy-spinning
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -430,6 +481,7 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
                     "coding" => PromptMode::Coding,
                     "email" => PromptMode::Email,
                     "general" => PromptMode::General,
+                    "casual" => PromptMode::Casual,
                     "custom" => PromptMode::Custom,
                     _ => PromptMode::Direct,
                 };
@@ -450,6 +502,12 @@ fn start_deepgram_streaming(app: tauri::AppHandle) {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     let _ = paste::paste_text(&polished);
                 }
+            }
+            // Only emit "done" from here on the silence auto-stop path.
+            // On the normal user-stop path, do_toggle_recording already emits "done";
+            // a second emit here would reset the hide timer unexpectedly.
+            if silence_triggered {
+                let _ = app.emit("pipeline-status", "done");
             }
             eprintln!("[VoxForge] Deepgram streaming ended");
         })

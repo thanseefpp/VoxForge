@@ -327,6 +327,7 @@ export default function App() {
                 { key: "coding", icon: "💻", name: "Coding", desc: "Dev prompts" },
                 { key: "email", icon: "📧", name: "Email", desc: "Professional" },
                 { key: "general", icon: "✨", name: "General", desc: "Clean up" },
+                { key: "casual", icon: "💬", name: "Casual", desc: "Friendly" },
                 { key: "custom", icon: "🔧", name: "Custom", desc: "Your prompt" },
               ].map((m) => (
                 <button
@@ -339,6 +340,18 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            {settings.stt_engine === "deepgram" &&
+             settings.llm_enabled &&
+             settings.prompt_mode !== "direct" && (
+              <div className="info-banner">
+                <span className="info-banner-icon">ℹ️</span>
+                <span>
+                  Real-time paste is paused while LLM polish is active. Deepgram will
+                  buffer your speech and paste the polished result once you stop recording.
+                </span>
+              </div>
+            )}
 
             {settings.prompt_mode === "custom" && (
               <div className="card" style={{ marginTop: 10 }}>

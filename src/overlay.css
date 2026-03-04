@@ -57,6 +57,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Explicit size so orbit ring's position:absolute has a guaranteed 72×72 anchor */
+  width: 72px;
+  height: 72px;
 }
 
 /* ─── Bubble entrance animation ─────────────────────────────────── */
@@ -211,6 +214,67 @@ body {
 @keyframes recDotBlink {
   0%, 100% { opacity: 1;   }
   50%       { opacity: 0.2; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   WAITING — silence detected, Groq polishing in background
+   Orbiting red dot circles the bubble border; center pulse pulses.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.voice-bubble.is-waiting {
+  border-color: var(--vf-danger);
+  background: linear-gradient(145deg, #1A0D0D, #100808);
+  box-shadow:
+    0 0 20px rgba(255, 107, 107, 0.15),
+    inset 0 0 12px rgba(255, 107, 107, 0.04);
+}
+
+.voice-bubble.is-waiting::before {
+  animation: none;
+  opacity: 0;
+}
+
+/* Ring that rotates around the bubble center (72×72, same as bubble) */
+.bubble-orbit-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 72px;
+  height: 72px;
+  animation: orbitRotate 1.5s linear infinite;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Dot sits at the top of the ring — 4px outside the bubble border */
+.bubble-orbit-dot {
+  position: absolute;
+  top: -4px;
+  left: 32px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vf-danger);
+  box-shadow: 0 0 10px var(--vf-danger-glow), 0 0 20px rgba(255, 107, 107, 0.5);
+}
+
+@keyframes orbitRotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Center pulse shown while waiting */
+.waiting-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vf-danger);
+  animation: waitingPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes waitingPulse {
+  0%, 100% { transform: scale(1);   opacity: 0.3; }
+  50%       { transform: scale(1.4); opacity: 0.7; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

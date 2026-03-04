@@ -74,7 +74,7 @@ async function readLogicalPosition(): Promise<{ x: number; y: number } | undefin
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type BubbleState = "idle" | "recording" | "processing" | "done" | "error";
+type BubbleState = "idle" | "recording" | "processing" | "waiting" | "done" | "error";
 
 // ─── Internal Waveform Circle Component ─────────────────────────────────────
 // 7 vertical bars drawn inside the circle bubble. Bar heights are driven by
@@ -254,11 +254,16 @@ export default function OverlayApp() {
                         case "recording":
                             show("recording");
                             break;
+                        case "silence":
+                            show("waiting");
+                            break;
                         case "transcribing":
                         case "processing":
-                        case "polishing":
                         case "pasting":
                             show("processing");
+                            break;
+                        case "polishing":
+                            setState(s => s === "waiting" ? "waiting" : "processing");
                             break;
                         case "done":
                             show("done");
@@ -339,13 +344,11 @@ export default function OverlayApp() {
 
     // ── State-derived class ──
     const stateClass =
-        state === "recording"
-            ? "is-recording"
-            : state === "processing"
-                ? "is-processing"
-                : state === "done"
-                    ? "is-done"
-                    : "";
+        state === "recording"  ? "is-recording"
+        : state === "processing" ? "is-processing"
+        : state === "waiting"    ? "is-waiting"
+        : state === "done"       ? "is-done"
+        : "";
 
     // ── Error Card ──
     if (state === "error") {
@@ -412,6 +415,13 @@ export default function OverlayApp() {
                         </div>
                     )}
 
+                    {/* Waiting (silence detected, Groq polishing): center pulse */}
+                    {state === "waiting" && (
+                        <div className="bubble-icon">
+                            <div className="waiting-pulse" />
+                        </div>
+                    )}
+
                     {/* Done: checkmark */}
                     {state === "done" && (
                         <div className="bubble-icon bubble-check">
@@ -423,6 +433,13 @@ export default function OverlayApp() {
                 {/* Blinking red dot — top-right of bubble, visible while recording */}
                 {state === "recording" && (
                     <div className="bubble-rec-dot" />
+                )}
+
+                {/* Orbiting red dot — circles the bubble border while waiting for Groq */}
+                {state === "waiting" && (
+                    <div className="bubble-orbit-ring">
+                        <div className="bubble-orbit-dot" />
+                    </div>
                 )}
             </div>
         </div>
